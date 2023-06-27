@@ -16766,6 +16766,7 @@ const defaultMediaQuadLayerInit = {
 };
 class XRQuadLayer extends XRCompositionLayerPolyfill {
     constructor(init, media) {
+        console.log("new XRQuadLayer");
         super();
         this._media = media !== null && media !== void 0 ? media : null;
         if (this.isMediaLayer()) {
@@ -18966,15 +18967,14 @@ class SubImageCache {
 }
 
 const isLayersNativelySupported = (global) => {
-    console.log("isLayersNativelySupported");
-    return false;
     // if (!global.navigator.xr) {
     //     return false;
     // }
     // if (global.XRMediaBinding && global.XRWebGLBinding) {
     //     return true;
     // }
-    // return false;
+    console.log("isLayersNativelySupported");
+    return false;
 };
 
 class WebXRLayersPolyfill {
@@ -24902,7 +24902,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   "PageUI": () => (/* binding */ PageUI)
 /* harmony export */ });
 /* harmony import */ var _workoutData_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./workoutData.js */ "./src/workoutData.js");
-/* harmony import */ var webxr_layers_polyfill_build_webxr_layers_polyfill_module_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! webxr-layers-polyfill/build/webxr-layers-polyfill.module.js */ "./node_modules/webxr-layers-polyfill/build/webxr-layers-polyfill.module.js");
+// /* harmony import */ var webxr_layers_polyfill_build_webxr_layers_polyfill_module_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! webxr-layers-polyfill/build/webxr-layers-polyfill.module.js */ "./node_modules/webxr-layers-polyfill/build/webxr-layers-polyfill.module.js");
 
 
 
@@ -25442,7 +25442,8 @@ class PageUI
 
         // this.uiConfigureButton.style.display = "";
 
-        this.layersPolyfill = new webxr_layers_polyfill_build_webxr_layers_polyfill_module_js__WEBPACK_IMPORTED_MODULE_1__["default"]()
+        // this.layersPolyfill = new webxr_layers_polyfill_build_webxr_layers_polyfill_module_js__WEBPACK_IMPORTED_MODULE_1__["default"]()
+        this.layersPolyfill = new XRWebGLBindingPolyfill()
 
         if (navigator.xr.offerSession !== undefined) {
             navigator.xr.offerSession('immersive-vr', {

@@ -1,0 +1,562 @@
+<!doctype html>
+<!--
+Copyright 2020 The Immersive Web Community Group
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-->
+<html>
+
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1, user-scalable=no'>
+  <meta name='mobile-web-app-capable' content='yes'>
+  <meta name='apple-mobile-web-app-capable' content='yes'>
+  <link rel='icon' type='image/png' sizes='32x32' href='../favicon-32x32.png'>
+  <link rel='icon' type='image/png' sizes='96x96' href='../favicon-96x96.png'>
+  <link rel='stylesheet' href='../css/common.css'>
+
+  <title>Quad Layer</title>
+  <!-- Stereo layer dependency -->
+  <script src="../js/wglu/wglu-program.js"></script>
+  <script src="../js/wglu/wglu-url.js"></script>
+  <script src="../js/stereo-util.js"></script>
+</head>
+
+<body>
+  <header style="max-width: 800px;">
+    <details open>
+      <summary>Quad Layer</summary>
+      <p>
+        This sample shows how to draw a scene into a quad layer.
+        Quad layers can be used for implementing small panels that
+        can be placed in front of the user containing text/image/video
+        information. Its use cases are similar to those of a cylinder
+        layer, but are generally favored when the panel is smaller.
+        <a class="back" href="./index.html">Back</a>
+      </p>
+      <p>
+        Image by Eric Cheng
+      </p>
+      <input type="checkbox" id="cyldIsStereo">Stereo quad layer</input><br />
+    </details>
+  </header>
+  <main style='text-align: center;'>
+    <p>Click 'Enter VR' to see content</p>
+  </main>
+  <script type="module">
+    import { WebXRButton } from '../js/util/webxr-button.js';
+    import { Scene, WebXRView } from '../js/render/scenes/scene.js';
+    import { Renderer, createWebGLContext } from '../js/render/core/renderer.js';
+    import { QueryArgs } from '../js/util/query-args.js';
+
+    const CYLD_TEXTURE_MONO_PATH = '../media/textures/rect-mono.png';
+    const CYLD_TEXTURE_STEREO_PATH = '../media/textures/rect-stereo-top-down.png';
+
+    // If requested, use the polyfill to provide support for mobile devices
+    // and devices which only support WebVR.
+    import WebXRPolyfill from '../js/third-party/webxr-polyfill/build/webxr-polyfill.module.js';
+    if (QueryArgs.getBool('usePolyfill', true)) {
+      let polyfill = new WebXRPolyfill();
+    }
+
+    // XR globals.
+    let xrButton = null;
+    let xrSession = null;
+    let xrRefSpace = null;
+    let xrGLFactory = null;
+    let xrFramebuffer = null;
+    let stereoUtil = null;
+
+    // WebGL scene globals.
+    let gl = null;
+    let renderer = null;
+    let scene = new Scene();
+
+    // Layer globals
+    let projLayer = null;
+    let cyldLayer = null;
+    let cyldImageElement = null;
+    let cyldIsStereo = false;
+    let cyldTextureWidth = 0;
+    let cyldTextureHeight = 0;
+
+    let tmpColorTexture = null;
+    let desColorTexture = null;
+    let depthTexture = null;
+    let position_handle = null;
+    let texCoord_handle = null;
+    let texUniform_handle = null;
+    let = uniform_uv_transform_handle_ = null;
+    let program = null;
+    // let kQuadVertices = [
+    // // x     y    u,   v
+    // -1.0,  1.0, 0.0, 1.0,
+    // -1.0, -1.0, 0.0, 0.0,
+    //  1.0, -1.0, 1.0, 0.0,
+    //  1.0,  1.0, 1.0, 1.0];
+
+    let uv_transform_floats2 = [1, 0, 0, 0,
+                                0, -1, 0, 1,
+                                0, 0, 1, 0,
+                                0, 0, 0, 1];
+
+  //   var uv_transform_floats = new Float32Array([
+  //         // left column front
+  //        1, 0, 0, 0,
+  //        -1, 0, 0, 0,
+  //        0, 1, 0, 0,
+  //        0, 1, 0, 1,
+  // ]);
+
+  // let matrix = new Matrix4();
+  // matrix.setScale(1, -1, 1);
+  // matrix.setTranslate(0, -1, 0);
+
+    function initXR() {
+      xrButton = new WebXRButton({
+        onRequestSession: onRequestSession,
+        onEndSession: onEndSession
+      });
+      document.querySelector('header').appendChild(xrButton.domElement);
+
+      if (navigator.xr) {
+        navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+          xrButton.enabled = supported;
+        });
+      }
+    }
+
+    function onRequestSession() {
+      if (!xrSession) {
+        navigator.xr.requestSession('immersive-vr', {
+          requiredFeatures: ['layers'],
+        }).then(onSessionStarted);
+      } else {
+        onEndSession();
+      }
+    }
+
+    function initGL() {
+      if (gl) { return; }
+      gl = createWebGLContext({ xrCompatible: true, webgl2: true, });
+      document.body.appendChild(gl.canvas);
+      gl.clearColor(0.0, 0, 0, 0.0);
+
+      function onResize() {
+        gl.canvas.width = gl.canvas.clientWidth * window.devicePixelRatio;
+        gl.canvas.height = gl.canvas.clientHeight * window.devicePixelRatio;
+      }
+      window.addEventListener('resize', onResize);
+      onResize();
+
+      renderer = new Renderer(gl);
+      scene.setRenderer(renderer);
+
+      // Util for rendering stereo layers
+      stereoUtil = new VRStereoUtil(gl);
+    }
+
+    //##############################################################
+    function checkComplete(gl) {
+      var e = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+      if (gl.FRAMEBUFFER_COMPLETE !== e) {
+        console.log('Frame buffer object is incomplete: ' + e.toString());
+      }
+    }
+
+    function createColorTexture(gl) {
+      console.log('createColorTexture');
+      // gl.activeTexture(gl.TEXTURE1);
+      let colorTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, colorTexture);
+
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+      // the proper texture format combination can be found here
+      // https://www.khronos.org/registry/OpenGL-Refpages/es3.0/html/glTexImage2D.xhtml
+      // gl.texImage2D(gl.TEXTURE_2D,
+      //     0,
+      //     gl.DEPTH_COMPONENT16,
+      //     2880, 1584,
+      //     0,
+      //     gl.DEPTH_COMPONENT,
+      //     gl.UNSIGNED_SHORT,
+      //   null);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1620, 1080, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      
+      return colorTexture;
+    }
+
+    function createDepthTexture(gl) {
+      console.log('createDepthTexture');
+      // gl.activeTexture(gl.TEXTURE1);
+      let depthTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, depthTexture);
+
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+      // the proper texture format combination can be found here
+      // https://www.khronos.org/registry/OpenGL-Refpages/es3.0/html/glTexImage2D.xhtml
+      gl.texImage2D(gl.TEXTURE_2D,
+          0,
+          gl.DEPTH_COMPONENT16,
+          1620, 1080,
+          0,
+          gl.DEPTH_COMPONENT,
+          gl.UNSIGNED_SHORT,
+        null);
+      
+      return depthTexture;
+    }
+
+    function clearColorTexture(gl, frame, texture) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, frame);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+      checkError(gl);
+      //gl.bindFramebuffer(gl.FRAMEBUFFER, 0);
+    }
+
+    function copyTexture(gl, frame_buffer, src, des) {
+      console.log('copyTexture begin');
+      useShaders(gl, program);
+      checkError(gl);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, frame_buffer);
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, des, 0);
+
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depthTexture, 0);
+
+      checkComplete(gl);
+
+      gl.viewport(0, 0, 1620, 1080); // Set a viewport for FBO
+
+      gl.uniformMatrix4fv(uniform_uv_transform_handle_, false,
+        uv_transform_floats2);
+      checkError(gl);
+        // mvpMatrix.elements);
+
+        // Configure texture. This is a 1:1 pixel copy since the surface
+        // size is resized to match the source canvas, so we can use
+        // GL_NEAREST.
+      gl.bindTexture(gl.TEXTURE_2D, src);
+      checkError(gl);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+      gl.clearColor(0.2, 0.2, 0.4, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+
+      checkError(gl);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+      console.log('copyTexture end');
+    
+    }
+
+    function checkError(gl) {
+      let error = gl.getError();
+      if ( error != gl.NO_ERROR) {
+        console.log('kenLog: ', error);
+      }
+    }
+
+    var vertexShaderSource = `
+    precision mediump float;
+    attribute vec4 a_Position;
+    attribute vec2 a_TexCoordinate;
+    varying highp vec2 v_TexCoordinate;
+    uniform mat4 u_UvTransform;
+    void main() {
+      highp vec4 uv_in = vec4(a_TexCoordinate.x, a_TexCoordinate.y, 0, 1);
+      v_TexCoordinate = (u_UvTransform * uv_in).xy;
+      gl_Position = a_Position;
+    }
+    `;
+
+    var fragmentShaderSource = `
+    precision highp float;
+    uniform sampler2D u_Texture;
+    varying vec2 v_TexCoordinate;
+    void main() {
+      gl_FragColor = texture2D(u_Texture, v_TexCoordinate);
+    }
+    `;
+
+    function loadShader(gl, type, source) {
+      // Create shader object
+      var shader = gl.createShader(type);
+      if (shader == null) {
+        console.log('unable to create shader');
+        return null;
+      }
+
+      // Set the shader program
+      gl.shaderSource(shader, source);
+
+      // Compile the shader
+      gl.compileShader(shader);
+
+      // Check the result of compilation
+      var compiled = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+      if (!compiled) {
+        var error = gl.getShaderInfoLog(shader);
+        console.log('Failed to compile shader: ' + error);
+        gl.deleteShader(shader);
+        return null;
+      }
+
+      return shader;
+    } 
+    
+    function createProgram(gl, vshader, fshader) {
+      // Create shader object
+      var vertexShader = loadShader(gl, gl.VERTEX_SHADER, vshader);
+      var fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fshader);
+      if (!vertexShader || !fragmentShader) {
+        return null;
+      }
+
+      // Create a program object
+      program = gl.createProgram();
+      if (!program) {
+        return null;
+      }
+
+      // Attach the shader objects
+      gl.attachShader(program, vertexShader);
+      gl.attachShader(program, fragmentShader);
+
+      // Link the program object
+      gl.linkProgram(program);
+
+      // Check the result of linking
+      var linked = gl.getProgramParameter(program, gl.LINK_STATUS);
+      if (!linked) {
+        var error = gl.getProgramInfoLog(program);
+        console.log('Failed to link program: ' + error);
+        gl.deleteProgram(program);
+        gl.deleteShader(fragmentShader);
+        gl.deleteShader(vertexShader);
+        return null;
+      }
+      return program;
+    }
+
+    function initShaders(gl, vshader, fshader) {
+      var program = createProgram(gl, vshader, fshader);
+      if (!program) {
+        console.log('Failed to create program');
+        return false;
+      }
+
+      gl.useProgram(program);
+      gl.program = program;
+
+      return true;
+    }
+
+    function useShaders(gl, program) {
+      gl.useProgram(program);
+      gl.program = program;
+    }
+
+    // function createDepthRenderBuffer(gl) {
+    //   let depthBuffer = gl.createRenderbuffer(); // Create a renderbuffer object
+    //   if (!depthBuffer) {
+    //     console.log('Failed to create renderbuffer object');
+    //     return error();
+    //   }
+    //   gl.bindRenderbuffer(gl.RENDERBUFFER, depthBuffer);
+    //   gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, 1620, 1080);
+    //   return depthBuffer;
+    // }
+
+    function initRenderer(gl) {
+      // position_handle = gl.getAttribLocation(program, "a_Position");
+      // texCoord_handle =
+      //     gl.getAttribLocation(program, "a_TexCoordinate");
+      // texUniform_handle =
+      //     gl.getUniformLocation(program, "u_Texture");
+      // uniform_uv_transform_handle_ =
+      //     gl.getUniformLocation(program, "u_UvTransform");
+
+      // var vertexBuffer = gl.createBuffer();  
+      // gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+      // gl.bufferData(gl.ARRAY_BUFFER, kQuadVertices,
+      //             gl.STATIC_DRAW);
+      
+      // gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+
+      // gl.enableVertexAttribArray(position_handle);
+      // gl.enableVertexAttribArray(texCoord_handle);
+
+      // var FSIZE = kQuadVertices.BYTES_PER_ELEMENT; 
+      // gl.vertexAttribPointer(position_handle, 2, gl.FLOAT, false,
+      // FSIZE*4, 0);
+      // gl.vertexAttribPointer(texCoord_handle, 2, gl.FLOAT, false,
+      // FSIZE*2, FSIZE * 2);
+
+      // //gl.activeTexture(GL_TEXTURE0);
+      // gl.uniform1i(texUniform_handle, 0);
+
+      // checkError(gl);
+    }
+    //##############################################################
+
+    function onSessionStarted(session) {
+      xrSession = session;
+      scene.inputRenderer.useProfileControllerMeshes(session);
+      session.addEventListener('end', onSessionEnded);
+
+      initGL();
+
+      initShaders(gl, vertexShaderSource, fragmentShaderSource);
+      initRenderer(gl);
+      // uniform_uv_transform_handle_ =
+      // gl.getUniformLocation(program, "u_UvTransform");
+
+      xrFramebuffer = gl.createFramebuffer();
+      xrGLFactory = new XRWebGLBinding(session, gl);
+
+      tmpColorTexture = createColorTexture(gl);
+      depthTexture = createDepthTexture(gl);
+      clearColorTexture(gl, xrFramebuffer, tmpColorTexture);
+
+      cyldIsStereo = document.getElementById("cyldIsStereo").checked;
+      let cyldImagePath = cyldIsStereo ?
+        CYLD_TEXTURE_STEREO_PATH :
+        CYLD_TEXTURE_MONO_PATH;
+
+      session.requestReferenceSpace('local').then((refSpace) => {
+        xrRefSpace = refSpace;
+        projLayer = xrGLFactory.createProjectionLayer({ space: refSpace, stencil: false });
+        session.updateRenderState({ layers: [projLayer] });
+
+        // Loading texture is async, create layer and update render state when done
+        let imageElement = document.createElement('img');
+        imageElement.src = cyldImagePath;
+        imageElement.onload = function () {
+          cyldTextureWidth = imageElement.width;
+          cyldTextureHeight = imageElement.height;
+          cyldImageElement = imageElement;
+          cyldLayer = xrGLFactory.createQuadLayer({
+            space: refSpace,
+            viewPixelWidth: cyldTextureWidth,
+            viewPixelHeight: cyldTextureHeight / (cyldIsStereo ? 2 : 1),
+            layout: cyldIsStereo ? "stereo-top-bottom" : "mono",
+          });
+          cyldLayer.width = 2;
+          cyldLayer.height = 1;
+          let pos = { x: 0, y: 0, z: -2 };
+          let orient = { x: 0, y: 0, z: 0, w: 1 };
+          cyldLayer.transform = new XRRigidTransform(pos, orient);
+
+          session.updateRenderState({ layers: [cyldLayer, projLayer] });
+        }
+
+        session.requestAnimationFrame(onXRFrame);
+      });
+    }
+
+    function onEndSession() {
+      xrSession.end();
+    }
+
+    function onSessionEnded(event) {
+      if (event.session.isImmersive) {
+        xrButton.setSession(null);
+      }
+      xrSession = null;
+      gl = null;
+    }
+
+    function onXRFrame(time, frame) {
+      let pose = frame.getViewerPose(xrRefSpace);
+      xrSession.requestAnimationFrame(onXRFrame);
+
+      if (cyldLayer && cyldLayer.needsRedraw) {
+        let glayer = xrGLFactory.getSubImage(cyldLayer, frame);
+        desColorTexture = glayer.colorTexture
+        // TEXTURE_CUBE_MAP expects the Y to be flipped for the faces and it already
+        // is flipped in our texture image.
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        //画到中间texture上
+        gl.bindTexture(gl.TEXTURE_2D, tmpColorTexture);
+        // gl.bindTexture(gl.TEXTURE_2D, glayer.colorTexture);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0,
+          0, 0,
+          gl.RGBA, gl.UNSIGNED_BYTE, cyldImageElement);
+        
+        gl.bindTexture(gl.TEXTURE_2D, null);
+
+        //从中间texture draw到真正的目标texture上
+        copyTexture(gl, xrFramebuffer, tmpColorTexture, desColorTexture);
+      }
+
+      if (pose) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, xrFramebuffer);
+        scene.updateInputSources(frame, xrRefSpace);
+
+        let views = [];
+        let i = 0;
+        for (let view of pose.views) {
+          let viewport = null;
+          let glLayer = xrGLFactory.getViewSubImage(projLayer, view);
+          glLayer.framebuffer = xrFramebuffer;
+          viewport = glLayer.viewport;
+          //desColorTexture = glLayer.colorTexture;
+          gl.bindFramebuffer(gl.FRAMEBUFFER, xrFramebuffer);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, glLayer.colorTexture, 0);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, glLayer.depthStencilTexture, 0);
+
+          if (i == 0) {
+            gl.enable(gl.SCISSOR_TEST);
+            gl.scissor(viewport.x, viewport.y, viewport.width, viewport.height);
+            // gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            gl.clear(gl.DEPTH_BUFFER_BIT);
+            //gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.disable(gl.SCISSOR_TEST);
+          }
+          i += 1;
+          
+
+          views.push(new WebXRView(view, glLayer, viewport));
+        }
+        scene.drawViewArray(views);
+
+      }
+      scene.endFrame();
+    }
+
+    initXR();
+  </script>
+</body>
+
+</html>
